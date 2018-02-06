@@ -1,0 +1,11 @@
+# cargo +nightly build --release --target wasm32-unknown-unknown
+[package]
+name = "wasm-pong"
+version = "0.1.0"
+authors = ["Teemu Erkkola <teemu.erkkola@iki.fi>"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
