@@ -137,7 +137,7 @@ pub fn onInit() {
 pub fn onAnimationFrame(timestamp: i32) {
     let pong = unsafe { PONG.as_mut().unwrap() };
     let delta = match pong.timestamp {
-        0 => timestamp,
+        0 => 1,
         x => timestamp - x
     } as f32;
     pong.timestamp = timestamp;
@@ -192,13 +192,13 @@ pub fn onAnimationFrame(timestamp: i32) {
                           * pong.ball_model.extent.y + ball.position.y,
                           0., 2. * ball.velocity.y);
         } else if ball.position.y > 0.95 {
-            ball.velocity.y = -ball.velocity.y;
+            ball.velocity.y = -ball.velocity.y.abs();
             play_audio(&pong.boop);
             create_sparks(&mut pong.sparks, ball.position.x,
                           pong.ball_model.extent.y + ball.position.y,
                           0., 2. * ball.velocity.y);
         } else if ball.position.y < -0.95 {
-            ball.velocity.y = -ball.velocity.y;
+            ball.velocity.y = ball.velocity.y.abs();
             play_audio(&pong.boop);
             create_sparks(&mut pong.sparks, ball.position.x,
                           -pong.ball_model.extent.y + ball.position.y,
