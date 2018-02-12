@@ -56,9 +56,9 @@ pub enum TextureFilterType { Nearest = 9728 }
 #[derive(Clone, Copy)]
 pub enum TextureUnit { Texture0 = 33984 }
 #[derive(Clone, Copy)]
-pub enum BlendFactor { SourceAlpha = 770, OneMinusSourceAlpha = 771, One = 1 }
+pub enum BlendFactor { SourceAlpha = 770, OneMinusSourceAlpha = 771, /*One = 1*/ }
 #[derive(Clone, Copy)]
-pub enum Bool { False = 0, True = 1 }
+pub enum Bool { False = 0, /*True = 1*/ }
 
 #[derive(Clone, Copy)]
 pub struct Buffer(u32, BufferType);
@@ -82,8 +82,8 @@ pub struct VertexArray(Attribute);
 pub struct Uniform(i32);
 
 pub struct ClearBit(u32);
-pub const ColorBuffer: ClearBit = ClearBit(16384);
-pub const DepthBuffer: ClearBit = ClearBit(256);
+pub const COLOR_BUFFER: ClearBit = ClearBit(16384);
+pub const DEPTH_BUFFER: ClearBit = ClearBit(256);
 
 impl BitOr for ClearBit {
     type Output = ClearBit;
@@ -116,7 +116,7 @@ impl Texture {
         }
         BoundTexture(self)
     }
-    pub fn with_data(mut self, data: &[u8], width: u32, height: u32) -> Texture {
+    pub fn with_data(self, data: &[u8], width: u32, height: u32) -> Texture {
         self.bind(TextureUnit::Texture0).data(data, width, height);
         self
     }

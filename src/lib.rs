@@ -24,7 +24,7 @@ struct RenderContext {
 }
 
 impl RenderContext {
-    unsafe fn new(program: ShaderProgram) -> RenderContext {
+    fn new(program: ShaderProgram) -> RenderContext {
         RenderContext {
             shader_program: program,
             position: program.vertex_array("a_position"),
@@ -65,13 +65,13 @@ static mut PONG: Option<Pong> = None;
 
 #[no_mangle]
 #[allow(non_snake_case)]
-pub unsafe fn onInit() {
+pub fn onInit() {
     clear_color(0.1, 0.1, 0.1, 1.0);
     enable(Capability::DepthTest);
     enable(Capability::Blend);
     depth_func(Comparison::LessOrEqual);
-    blend_func(BlendFactor::SourceAlpha, BlendFactor::One);
-    clear(ColorBuffer | DepthBuffer);
+    blend_func(BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
+    clear(COLOR_BUFFER | DEPTH_BUFFER);
 
     let vertex_shader = VertexShader::new(data::VERTEX_SHADER);
     let fragment_shader = FragmentShader::new(data::FRAGMENT_SHADER);
@@ -103,31 +103,33 @@ pub unsafe fn onInit() {
         bloop.push(sq64 + sq128);
     }
 
-    PONG = Some(Pong {
-        ctx,
-        timestamp: 0,
+    unsafe {
+        PONG = Some(Pong {
+            ctx,
+            timestamp: 0,
 
-        ball_model, ball_tail_model, paddle_model, spark_model, field_model,
-        beep, boop, bloop,
+            ball_model, ball_tail_model, paddle_model, spark_model, field_model,
+            beep, boop, bloop,
 
-        ball: Ball {
-            position: Vec2::zero(),
-            velocity: Vec2::new(1.0, 1.0),
-        },
-        left: Paddle {
-            position: Vec2::new(-0.9, 0.0),
-            up: false, down: false
-        },
-        right: Paddle {
-            position: Vec2::new(0.9, 0.0),
-            up: false, down: false
-        },
-        ball_tail: ParticleSystem::new(100),
-        sparks: ParticleSystem::new(100),
+            ball: Ball {
+                position: Vec2::zero(),
+                velocity: Vec2::new(1.0, 1.0),
+            },
+            left: Paddle {
+                position: Vec2::new(-0.9, 0.0),
+                up: false, down: false
+            },
+            right: Paddle {
+                position: Vec2::new(0.9, 0.0),
+                up: false, down: false
+            },
+            ball_tail: ParticleSystem::new(100),
+            sparks: ParticleSystem::new(100),
 
-        left_score: 0,
-        right_score: 0
-    });
+            left_score: 0,
+            right_score: 0
+        });
+    }
 }
 
 #[no_mangle]
@@ -207,7 +209,7 @@ pub fn onAnimationFrame(timestamp: i32) {
     pong.ball_tail.update(delta);
     pong.sparks.update(delta);
 
-    clear(ColorBuffer | DepthBuffer);
+    clear(COLOR_BUFFER | DEPTH_BUFFER);
     pong.ctx.shader_program.enable();
     pong.ctx.position.enable();
     pong.ctx.texcoord.enable();
@@ -328,28 +330,27 @@ struct Particle {
 struct ParticleSystem {
     max_particles: usize,
     particles: Vec<Particle>,   
-    alive: usize
 }
 
 impl ParticleSystem {
     fn new(max_particles: usize) -> ParticleSystem {
         ParticleSystem {
             max_particles,
-            particles: Vec::with_capacity(max_particles),
-            alive: 0
+            particles: Vec::with_capacity(max_particles)
         }
     }
     fn render(&self, model: &Model, ctx: &RenderContext) {
         model.pre_render(ctx);
-        for particle in self.particles.iter().take(self.alive) {
+        for particle in self.particles.iter() {
             model.render_particle(&particle.position, 
                                   particle.life as f32 / particle.total_life as f32,
                                   ctx);
         }
     }
     fn add(&mut self, position: Vec2, velocity: Vec2, acceleration: Vec2, life: i32) {
-        self.particles.push(Particle { position, velocity, acceleration, life, total_life: life });
-        self.alive += 1;
+        if self.particles.len() < self.max_particles {
+            self.particles.push(Particle { position, velocity, acceleration, life, total_life: life });
+        }
     }
     fn update(&mut self, delta: f32) {
         for p in self.particles.iter_mut() {
