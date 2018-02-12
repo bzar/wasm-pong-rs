@@ -15,12 +15,25 @@ const BALL_SPEED: f32 = 0.0012;
 const AUDIO_BUFFER_SIZE: usize = 8192;
 
 struct RenderContext {
-    shader_program_id: u32,
-    position_attrib_location: i32,
-    texcoord_attrib_location: i32,
-    offset_uniform_location: i32,
-    sampler_uniform_location: i32,
-    opacity_uniform_location: i32,
+    shader_program: ShaderProgram,
+    position: VertexArray,
+    texcoord: VertexArray,
+    offset: Uniform,
+    sampler: Uniform,
+    opacity: Uniform,
+}
+
+impl RenderContext {
+    unsafe fn new(program: ShaderProgram) -> RenderContext {
+        RenderContext {
+            shader_program: program,
+            position: program.vertex_array("a_position"),
+            texcoord: program.vertex_array("a_texcoord"),
+            offset: program.uniform("u_offset"),
+            sampler: program.uniform("u_sampler"),
+            opacity:  program.uniform("u_opacity")
+        }
+    }
 }
 
 struct Pong {
@@ -52,37 +65,31 @@ static mut PONG: Option<Pong> = None;
 
 #[no_mangle]
 #[allow(non_snake_case)]
-pub fn onInit() {
-    unsafe {
-        glClearColor(0.1, 0.1, 0.1, 1.0);
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glDepthFunc(GL_LEQUAL);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    }
+pub unsafe fn onInit() {
+    clear_color(0.1, 0.1, 0.1, 1.0);
+    enable(Capability::DepthTest);
+    enable(Capability::Blend);
+    depth_func(Comparison::LessOrEqual);
+    blend_func(BlendFactor::SourceAlpha, BlendFactor::One);
+    clear(ColorBuffer | DepthBuffer);
 
-    let vertex_shader_id = gl_compile_shader(data::VERTEX_SHADER, GL_VERTEX_SHADER);
-    let fragment_shader_id = gl_compile_shader(data::FRAGMENT_SHADER, GL_FRAGMENT_SHADER);
-    let program_id = unsafe { linkShaderProgram(vertex_shader_id, fragment_shader_id) };
+    let vertex_shader = VertexShader::new(data::VERTEX_SHADER);
+    let fragment_shader = FragmentShader::new(data::FRAGMENT_SHADER);
+    let program = ShaderProgram::new(&vertex_shader, &fragment_shader);
 
-    let position_attrib_location = gl_get_attrib_location(program_id, "a_position");
-    let texcoord_attrib_location = gl_get_attrib_location(program_id, "a_texcoord");
-    let offset_uniform_location = gl_get_uniform_location(program_id, "u_offset");
-    let sampler_uniform_location = gl_get_uniform_location(program_id, "u_sampler");
-    let opacity_uniform_location = gl_get_uniform_location(program_id, "u_opacity");
+    let ctx = RenderContext::new(program);
 
-    let ball_texture_id = gl_init_texture(&data::BALL_TEXTURE, 4, 4);
-    let ball_tail_texture_id = gl_init_texture(&data::BALL_TAIL_TEXTURE, 4, 4);
-    let spark_texture_id = gl_init_texture(&data::SPARK_TEXTURE, 4, 4);
-    let paddle_texture_id = gl_init_texture(&data::PADDLE_TEXTURE, 8, 8);
-    let field_texture_id = gl_init_texture(&data::FIELD_TEXTURE, 8, 8);
+    let ball_texture = Texture::new(TextureType::Texture2D).with_data(&data::BALL_TEXTURE, 4, 4);
+    let ball_tail_texture = Texture::new(TextureType::Texture2D).with_data(&data::BALL_TAIL_TEXTURE, 4, 4);
+    let spark_texture = Texture::new(TextureType::Texture2D).with_data(&data::SPARK_TEXTURE, 4, 4);
+    let paddle_texture = Texture::new(TextureType::Texture2D).with_data(&data::PADDLE_TEXTURE, 8, 8);
+    let field_texture = Texture::new(TextureType::Texture2D).with_data(&data::FIELD_TEXTURE, 8, 8);
 
-    let ball_model = Model::new(&data::BALL_VERTICES, ball_texture_id);
-    let ball_tail_model = Model::new(&data::BALL_TAIL_VERTICES, ball_tail_texture_id);
-    let spark_model = Model::new(&data::SPARK_VERTICES, spark_texture_id);
-    let paddle_model = Model::new(&data::PADDLE_VERTICES, paddle_texture_id);
-    let field_model = Model::new(&data::FIELD_VERTICES, field_texture_id);
+    let ball_model = Model::new(&data::BALL_VERTICES, ball_texture);
+    let ball_tail_model = Model::new(&data::BALL_TAIL_VERTICES, ball_tail_texture);
+    let spark_model = Model::new(&data::SPARK_VERTICES, spark_texture);
+    let paddle_model = Model::new(&data::PADDLE_VERTICES, paddle_texture);
+    let field_model = Model::new(&data::FIELD_VERTICES, field_texture);
 
     let mut beep: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
     let mut boop: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
@@ -96,40 +103,31 @@ pub fn onInit() {
         bloop.push(sq64 + sq128);
     }
 
-    unsafe {
-        PONG = Some(Pong {
-            ctx: RenderContext {
-                shader_program_id: program_id,
-                position_attrib_location,
-                texcoord_attrib_location,
-                offset_uniform_location,
-                sampler_uniform_location,
-                opacity_uniform_location,
-            },
-            timestamp: 0,
+    PONG = Some(Pong {
+        ctx,
+        timestamp: 0,
 
-            ball_model, ball_tail_model, paddle_model, spark_model, field_model,
-            beep, boop, bloop,
+        ball_model, ball_tail_model, paddle_model, spark_model, field_model,
+        beep, boop, bloop,
 
-            ball: Ball {
-                position: Vec2::zero(),
-                velocity: Vec2::new(1.0, 1.0),
-            },
-            left: Paddle {
-                position: Vec2::new(-0.9, 0.0),
-                up: false, down: false
-            },
-            right: Paddle {
-                position: Vec2::new(0.9, 0.0),
-                up: false, down: false
-            },
-            ball_tail: ParticleSystem::new(100),
-            sparks: ParticleSystem::new(100),
+        ball: Ball {
+            position: Vec2::zero(),
+            velocity: Vec2::new(1.0, 1.0),
+        },
+        left: Paddle {
+            position: Vec2::new(-0.9, 0.0),
+            up: false, down: false
+        },
+        right: Paddle {
+            position: Vec2::new(0.9, 0.0),
+            up: false, down: false
+        },
+        ball_tail: ParticleSystem::new(100),
+        sparks: ParticleSystem::new(100),
 
-            left_score: 0,
-            right_score: 0
-        });
-    }
+        left_score: 0,
+        right_score: 0
+    });
 }
 
 #[no_mangle]
@@ -209,12 +207,10 @@ pub fn onAnimationFrame(timestamp: i32) {
     pong.ball_tail.update(delta);
     pong.sparks.update(delta);
 
-    unsafe {
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glUseProgram(pong.ctx.shader_program_id);
-        glEnableVertexAttribArray(pong.ctx.position_attrib_location);
-        glEnableVertexAttribArray(pong.ctx.texcoord_attrib_location);
-    }
+    clear(ColorBuffer | DepthBuffer);
+    pong.ctx.shader_program.enable();
+    pong.ctx.position.enable();
+    pong.ctx.texcoord.enable();
 
     pong.field_model.pre_render(&pong.ctx);
     pong.field_model.render(&Vec2 {x: 0.0, y: 0.0}, &pong.ctx);
@@ -265,20 +261,16 @@ impl Vec2 {
 }
 
 struct Model {
-    vertex_buffer_id: u32,
+    vertex_buffer: Buffer,
     num_vertices: u32,
-    texture_id: u32,
+    texture: Texture,
     extent: Vec2
 }
 
 impl Model {
-    fn new(vertices: &[f32], texture_id: u32) -> Model {
-        let vertex_buffer_id = unsafe {
-            let id = glCreateBuffer();
-            glBindBuffer(GL_ARRAY_BUFFER, id);
-            gl_buffer_data(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-            id
-        };
+    fn new(vertices: &[f32], texture: Texture) -> Model {
+        let vertex_buffer = Buffer::new(BufferType::Array);
+        vertex_buffer.bind().data(vertices, DrawType::Static);
 
         let mut x: f32 = 0.0;
         let mut y: f32 = 0.0;
@@ -289,35 +281,28 @@ impl Model {
         }
 
         Model {
-            vertex_buffer_id,
+            vertex_buffer,
             num_vertices: vertices.len() as u32,
-            texture_id,
+            texture,
             extent: Vec2 { x: x * 0.9, y: y * 0.9 }
         }
     }
     fn pre_render(&self, ctx: &RenderContext) {
-        unsafe {
-            glBindBuffer(GL_ARRAY_BUFFER, self.vertex_buffer_id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, self.texture_id);
-            glVertexAttribPointer(ctx.position_attrib_location, 2, GL_FLOAT, 0, 16, 0);
-            glVertexAttribPointer(ctx.texcoord_attrib_location, 2, GL_FLOAT, 0, 16, 8);
-            glUniform1i(ctx.sampler_uniform_location, 0);
-            glUniform1f(ctx.opacity_uniform_location, 1.0);
-        }
+        self.vertex_buffer.bind();
+        self.texture.bind(TextureUnit::Texture0);
+        ctx.position.pointer(2, DataType::Float, Bool::False, 16, 0);
+        ctx.texcoord.pointer(2, DataType::Float, Bool::False, 16, 8);
+        ctx.sampler.int_1(0);
+        ctx.opacity.float_1(1.0);
     }
     fn render(&self, pos: &Vec2, ctx: &RenderContext) {
-        unsafe {
-            glUniform4fv(ctx.position_attrib_location, pos.x, pos.y, 0.0, 0.0);
-            glDrawArrays(GL_TRIANGLES, 0, self.num_vertices / 4);
-        }
+        ctx.offset.float_4(pos.x, pos.y, 0.0, 0.0);
+        draw_arrays(ArrayType::Triangles, 0, self.num_vertices / 4);
     }
     fn render_particle(&self, pos: &Vec2, opacity: f32, ctx: &RenderContext) {
-        unsafe {
-            glUniform4fv(ctx.position_attrib_location, pos.x, pos.y, 0.0, 0.0);
-            glUniform1f(ctx.opacity_uniform_location, opacity);
-            glDrawArrays(GL_TRIANGLES, 0, self.num_vertices / 4);
-        }
+        ctx.offset.float_4(pos.x, pos.y, 0.0, 0.0);
+        ctx.opacity.float_1(opacity);
+        draw_arrays(ArrayType::Triangles, 0, self.num_vertices / 4);
     }
 }
 
