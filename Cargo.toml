@@ -9,3 +9,4 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+sfxr = "0.1.3"

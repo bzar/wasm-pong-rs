@@ -1,3 +1,4 @@
+extern crate sfxr;
 mod opengl;
 mod data;
 
@@ -46,10 +47,6 @@ struct Pong {
     spark_model: Model,
     field_model: Model,
 
-    beep: Vec<f32>,
-    boop: Vec<f32>,
-    bloop: Vec<f32>,
-
     ball: Ball,
     left: Paddle,
     right: Paddle,
@@ -91,17 +88,6 @@ pub fn onInit() {
     let paddle_model = Model::new(&data::PADDLE_VERTICES, paddle_texture);
     let field_model = Model::new(&data::FIELD_VERTICES, field_texture);
 
-    let mut beep: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
-    let mut boop: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
-    let mut bloop: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
-
-    for i in 0..AUDIO_BUFFER_SIZE {
-        let sq64 = if i/64 % 2 == 0 { 0.1 } else { -0.1 };
-        let sq128 = if i/128 % 2 == 0 { 0.1 } else { -0.1 };
-        beep.push(sq64);
-        boop.push(sq128);
-        bloop.push(sq64 + sq128);
-    }
 
     unsafe {
         PONG = Some(Pong {
@@ -109,7 +95,6 @@ pub fn onInit() {
             timestamp: 0,
 
             ball_model, ball_tail_model, paddle_model, spark_model, field_model,
-            beep, boop, bloop,
 
             ball: Ball {
                 position: Vec2::zero(),
@@ -158,7 +143,7 @@ pub fn onAnimationFrame(timestamp: i32) {
                    &right.position, &pong.paddle_model.extent) {
             ball.velocity.x = -ball.velocity.x;
             ball.position.x += ball.velocity.x * delta * BALL_SPEED;
-            play_audio(&pong.beep);
+            play_sample(sfxr::Sample::laser(Some(pong.timestamp as usize)));
             create_sparks(&mut pong.sparks,
                           (if ball.velocity.x > 0. { -1. } else { 1. })
                           * pong.ball_model.extent.x + ball.position.x,
@@ -168,14 +153,14 @@ pub fn onAnimationFrame(timestamp: i32) {
             pong.left_score += 1;
             ball.velocity.x = (1 - 2 * (timestamp % 2)) as f32;
             ball.velocity.y = (1 - 2 * ((timestamp/7) % 2)) as f32;
-            play_audio(&pong.bloop);
+            play_sample(sfxr::Sample::explosion(Some(pong.timestamp as usize)));
             unsafe { setScore(0, pong.left_score) };
         } else if ball.position.x < -1.05 {
             ball.position.x = 0.0;
             pong.right_score += 1;
             ball.velocity.x = (1 - 2 * (timestamp % 2)) as f32;
             ball.velocity.y = (1 - 2 * ((timestamp/7) % 2)) as f32;
-            play_audio(&pong.bloop);
+            play_sample(sfxr::Sample::explosion(Some(pong.timestamp as usize)));
             unsafe { setScore(1, pong.right_score) };
         }
 
@@ -186,20 +171,20 @@ pub fn onAnimationFrame(timestamp: i32) {
                    &right.position, &pong.paddle_model.extent) {
             ball.velocity.y = -ball.velocity.y;
             ball.position.y += ball.velocity.y * delta as f32 * BALL_SPEED;
-            play_audio(&pong.beep);
+            play_sample(sfxr::Sample::laser(Some(pong.timestamp as usize)));
             create_sparks(&mut pong.sparks, ball.position.x,
                           (if ball.velocity.y > 0. { -1. } else { 1. })
                           * pong.ball_model.extent.y + ball.position.y,
                           0., 2. * ball.velocity.y);
         } else if ball.position.y > 0.95 {
             ball.velocity.y = -ball.velocity.y.abs();
-            play_audio(&pong.boop);
+            play_sample(sfxr::Sample::blip(Some(pong.timestamp as usize)));
             create_sparks(&mut pong.sparks, ball.position.x,
                           pong.ball_model.extent.y + ball.position.y,
                           0., 2. * ball.velocity.y);
         } else if ball.position.y < -0.95 {
             ball.velocity.y = ball.velocity.y.abs();
-            play_audio(&pong.boop);
+            play_sample(sfxr::Sample::blip(Some(pong.timestamp as usize)));
             create_sparks(&mut pong.sparks, ball.position.x,
                           -pong.ball_model.extent.y + ball.position.y,
                           0., 2. * ball.velocity.y);
@@ -386,4 +371,11 @@ fn create_sparks(ps: &mut ParticleSystem, x: f32, y: f32, dx: f32, dy: f32) {
         ps.add(Vec2::new(x, y), Vec2::new(dy + ddx, -dx + ddy), Vec2::zero(), 100);
         ps.add(Vec2::new(x, y), Vec2::new(-dy + ddx, dx + ddy), Vec2::zero(), 100);
     }
+}
+
+fn play_sample(sample: sfxr::Sample) {
+    let mut generator = sfxr::Generator::new(sample);
+    let mut buffer: [f32; AUDIO_BUFFER_SIZE] = [0.0; AUDIO_BUFFER_SIZE];
+    generator.generate(&mut buffer);
+    play_audio(&buffer);
 }
