@@ -372,7 +372,7 @@ fn clamp(x: f32, min: f32, max: f32) -> f32 {
     x.max(min).min(max)
 }
 
-fn play_audio(sample: &Vec<f32>) {
+fn play_audio(sample: &[f32]) {
     unsafe {
         playAudio(sample.as_ptr(), sample.len() as u32);
     }

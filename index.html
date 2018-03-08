@@ -113,7 +113,7 @@ const playAudio = (bufferPtr, bufferSize) => {
   source.start();
 }
 
-const env = {compileShader, linkShaderProgram, glClearColor, glEnable, glDepthFunc, glBlendFunc, glClear, glGetAttribLocation, glGetUniformLocation, glUniform4fv, glUniform1i, glUniform1f, glCreateBuffer, glBindBuffer, glBufferData, glUseProgram, glEnableVertexAttribArray, glVertexAttribPointer, glDrawArrays, glCreateTexture, glBindTexture, glTexImage2D, glTexParameteri, glActiveTexture, consoleLog, playAudio, setScore};
+const env = {compileShader, linkShaderProgram, glClearColor, glEnable, glDepthFunc, glBlendFunc, glClear, glGetAttribLocation, glGetUniformLocation, glUniform4fv, glUniform1i, glUniform1f, glCreateBuffer, glBindBuffer, glBufferData, glUseProgram, glEnableVertexAttribArray, glVertexAttribPointer, glDrawArrays, glCreateTexture, glBindTexture, glTexImage2D, glTexParameteri, glActiveTexture, consoleLog, playAudio, setScore, sin: Math.sin, sinf: Math.sin, powi: Math.pow};
 
 fetchAndInstantiate('wasm_pong.min.wasm', {env}).then(function(instance) {
   memory = instance.exports.memory;
