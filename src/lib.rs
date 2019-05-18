@@ -103,7 +103,10 @@ pub fn start() -> Result<(), JsValue> {
     let window = web_sys::window().unwrap();
     let document = window.document().unwrap();
     let canvas: HtmlCanvasElement = document.get_element_by_id("canvas").unwrap().dyn_into()?;
-    let gl: WebGlRenderingContext = canvas.get_context("webgl")?.unwrap().dyn_into()?; 
+    let ctx_options = js_sys::Object::new();
+    js_sys::Reflect::set(&ctx_options, &"alpha".into(), &false.into()).unwrap();
+    let gl: WebGlRenderingContext = canvas
+        .get_context_with_context_options("webgl", &ctx_options)?.unwrap().dyn_into()?;
 
     gl.clear_color(0.1, 0.1, 0.1, 1.0);
     gl.enable(GL::DEPTH_TEST);
