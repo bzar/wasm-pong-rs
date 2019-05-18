@@ -1,14 +1,37 @@
-# cargo +nightly build --release --target wasm32-unknown-unknown
 [package]
 name = "wasm-pong"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Teemu Erkkola <teemu.erkkola@iki.fi>"]
+edition = "2018"
 
 [lib]
-path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+wasm-bindgen = "0.2.43"
+js-sys = "0.3.20"
+
+[dependencies.web-sys]
+version = "0.3.20"
+features = [
+  'AudioContext',
+  'AudioBuffer',
+  'AudioNode',
+  'AudioBufferSourceNode',
+  'AudioDestinationNode',
+  'Document',
+  'Element',
+  'HtmlCanvasElement',
+  'KeyboardEvent',
+  'Node',
+  'WebGlBuffer',
+  'WebGlRenderingContext',
+  'WebGlProgram',
+  'WebGlShader',
+  'WebGlUniformLocation',
+  'WebGlTexture',
+  'Window',
+]
 
 [profile.release]
 opt-level = 'z'

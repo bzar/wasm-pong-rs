@@ -1,43 +1,78 @@
-mod opengl;
 mod data;
 
-use opengl::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-extern {
-    //fn consoleLog(x: u32);
-    fn playAudio(audio_ptr: *const f32, audio_len: u32);
-    fn setScore(left: u32, right: u32);
-}
+use js_sys::WebAssembly;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::{
+    WebGlProgram, WebGlUniformLocation, WebGlRenderingContext, WebGlShader,
+    WebGlTexture, WebGlBuffer, AudioContext, AudioBuffer, HtmlCanvasElement,
+    KeyboardEvent
+};
+
+// Convenience alias for referring to OpenGL constants
+type GL = WebGlRenderingContext;
 
 const PADDLE_SPEED: f32 = 0.001;
 const BALL_SPEED: f32 = 0.0012;
 
 const AUDIO_BUFFER_SIZE: usize = 8192;
+type WebGlVertexArray = i32;
 
 struct RenderContext {
-    shader_program: ShaderProgram,
-    position: VertexArray,
-    texcoord: VertexArray,
-    offset: Uniform,
-    sampler: Uniform,
-    opacity: Uniform,
+    gl: WebGlRenderingContext,
+    program: WebGlProgram,
+    position: WebGlVertexArray,
+    texcoord: WebGlVertexArray,
+    offset: WebGlUniformLocation,
+    sampler: WebGlUniformLocation,
+    opacity: WebGlUniformLocation,
 }
 
-impl RenderContext {
-    fn new(program: ShaderProgram) -> RenderContext {
-        RenderContext {
-            shader_program: program,
-            position: program.vertex_array("a_position"),
-            texcoord: program.vertex_array("a_texcoord"),
-            offset: program.uniform("u_offset"),
-            sampler: program.uniform("u_sampler"),
-            opacity:  program.uniform("u_opacity")
-        }
-    }
+#[derive(Clone)]
+struct Vec2 {
+    x: f32,
+    y: f32
+}
+
+struct Model {
+    vertex_buffer: WebGlBuffer,
+    num_vertices: u32,
+    texture: WebGlTexture,
+    extent: Vec2
+}
+
+struct Ball {
+    position: Vec2,
+    velocity: Vec2
+}
+
+struct Paddle {
+    position: Vec2,
+    up: bool,
+    down: bool,
+}
+
+struct Particle {
+    position: Vec2,
+    velocity: Vec2,
+    acceleration: Vec2,
+    life: i32,
+    total_life: i32
+}
+
+struct ParticleSystem {
+    max_particles: usize,
+    particles: Vec<Particle>,   
 }
 
 struct Pong {
     ctx: RenderContext,
+    audio_ctx: AudioContext,
+    audio_buffer: AudioBuffer,
+
     timestamp: i32,
 
     ball_model: Model,
@@ -63,33 +98,38 @@ struct Pong {
 
 static mut PONG: Option<Pong> = None;
 
-#[no_mangle]
-#[allow(non_snake_case)]
-pub fn onInit() {
-    clear_color(0.1, 0.1, 0.1, 1.0);
-    enable(Capability::DepthTest);
-    enable(Capability::Blend);
-    depth_func(Comparison::LessOrEqual);
-    blend_func(BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
-    clear(COLOR_BUFFER | DEPTH_BUFFER);
+#[wasm_bindgen(start)]
+pub fn start() -> Result<(), JsValue> {
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+    let canvas: HtmlCanvasElement = document.get_element_by_id("canvas").unwrap().dyn_into()?;
+    let gl: WebGlRenderingContext = canvas.get_context("webgl")?.unwrap().dyn_into()?; 
 
-    let vertex_shader = VertexShader::new(data::VERTEX_SHADER);
-    let fragment_shader = FragmentShader::new(data::FRAGMENT_SHADER);
-    let program = ShaderProgram::new(&vertex_shader, &fragment_shader);
+    gl.clear_color(0.1, 0.1, 0.1, 1.0);
+    gl.enable(GL::DEPTH_TEST);
+    gl.enable(GL::BLEND);
+    gl.depth_func(GL::LEQUAL);
+    gl.blend_func(GL::SRC_ALPHA, GL::ONE_MINUS_SRC_ALPHA);
+    gl.clear(GL::COLOR_BUFFER_BIT | GL::DEPTH_BUFFER_BIT);
 
-    let ctx = RenderContext::new(program);
+    let vert_shader = compile_shader(&gl, GL::VERTEX_SHADER, data::VERTEX_SHADER)?;
+    let frag_shader = compile_shader(&gl, GL::FRAGMENT_SHADER, data::FRAGMENT_SHADER)?;
+    let program = link_program(&gl, &vert_shader, &frag_shader)?;
+    gl.use_program(Some(&program));
 
-    let ball_texture = Texture::new(TextureType::Texture2D).with_data(&data::BALL_TEXTURE, 4, 4);
-    let ball_tail_texture = Texture::new(TextureType::Texture2D).with_data(&data::BALL_TAIL_TEXTURE, 4, 4);
-    let spark_texture = Texture::new(TextureType::Texture2D).with_data(&data::SPARK_TEXTURE, 4, 4);
-    let paddle_texture = Texture::new(TextureType::Texture2D).with_data(&data::PADDLE_TEXTURE, 8, 8);
-    let field_texture = Texture::new(TextureType::Texture2D).with_data(&data::FIELD_TEXTURE, 8, 8);
+    let ctx = RenderContext::new(gl, program);
 
-    let ball_model = Model::new(&data::BALL_VERTICES, ball_texture);
-    let ball_tail_model = Model::new(&data::BALL_TAIL_VERTICES, ball_tail_texture);
-    let spark_model = Model::new(&data::SPARK_VERTICES, spark_texture);
-    let paddle_model = Model::new(&data::PADDLE_VERTICES, paddle_texture);
-    let field_model = Model::new(&data::FIELD_VERTICES, field_texture);
+    let ball_texture = ctx.load_texture(&data::BALL_TEXTURE, 4, 4);
+    let ball_tail_texture = ctx.load_texture(&data::BALL_TAIL_TEXTURE, 4, 4);
+    let spark_texture = ctx.load_texture(&data::SPARK_TEXTURE, 4, 4);
+    let paddle_texture = ctx.load_texture(&data::PADDLE_TEXTURE, 8, 8);
+    let field_texture = ctx.load_texture(&data::FIELD_TEXTURE, 8, 8);
+
+    let ball_model = Model::new(&ctx, &data::BALL_VERTICES, ball_texture);
+    let ball_tail_model = Model::new(&ctx, &data::BALL_TAIL_VERTICES, ball_tail_texture);
+    let spark_model = Model::new(&ctx, &data::SPARK_VERTICES, spark_texture);
+    let paddle_model = Model::new(&ctx, &data::PADDLE_VERTICES, paddle_texture);
+    let field_model = Model::new(&ctx, &data::FIELD_VERTICES, field_texture);
 
     let mut beep: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
     let mut boop: Vec<f32> = Vec::with_capacity(AUDIO_BUFFER_SIZE);
@@ -103,9 +143,13 @@ pub fn onInit() {
         bloop.push(sq64 + sq128);
     }
 
+    let audio_ctx = AudioContext::new().unwrap();
+    let audio_buffer = audio_ctx.create_buffer(
+        1, (audio_ctx.sample_rate() * 2.0) as u32, audio_ctx.sample_rate()).unwrap();
+
     unsafe {
         PONG = Some(Pong {
-            ctx,
+            ctx, audio_ctx, audio_buffer,
             timestamp: 0,
 
             ball_model, ball_tail_model, paddle_model, spark_model, field_model,
@@ -130,11 +174,39 @@ pub fn onInit() {
             right_score: 0
         });
     }
+
+    // FIXME: Hack for requestAnimationFrame loop
+    let f = Rc::new(RefCell::new(None));
+    let g = f.clone();
+    *g.borrow_mut() = Some(Closure::wrap(Box::new(move |i| {
+        on_animation_frame(i);
+        request_animation_frame(f.borrow().as_ref().unwrap());
+    }) as Box<FnMut(i32)>));
+    request_animation_frame(g.borrow().as_ref().unwrap());
+
+    // FIXME: Hacky key event handler binding
+    let onkeydown_handler = Closure::wrap(Box::new(|e: KeyboardEvent| {
+        on_key(e.key_code(), true);
+    }) as Box<FnMut(KeyboardEvent)>);
+    window.set_onkeydown(Some(onkeydown_handler.as_ref().unchecked_ref()));
+    onkeydown_handler.forget();
+
+    let onkeyup_handler = Closure::wrap(Box::new(|e: KeyboardEvent| {
+        on_key(e.key_code(), false);
+    }) as Box<FnMut(KeyboardEvent)>);
+    window.set_onkeyup(Some(onkeyup_handler.as_ref().unchecked_ref()));
+    onkeyup_handler.forget();
+
+    Ok(())
 }
 
-#[no_mangle]
-#[allow(non_snake_case)]
-pub fn onAnimationFrame(timestamp: i32) {
+fn request_animation_frame(f: &Closure<FnMut(i32)>) {
+    web_sys::window().unwrap()
+        .request_animation_frame(f.as_ref().unchecked_ref())
+        .expect("should register `requestAnimationFrame` OK");
+}
+
+pub fn on_animation_frame(timestamp: i32) {
     let pong = unsafe { PONG.as_mut().unwrap() };
     let delta = match pong.timestamp {
         0 => 1,
@@ -163,20 +235,18 @@ pub fn onAnimationFrame(timestamp: i32) {
                           (if ball.velocity.x > 0. { -1. } else { 1. })
                           * pong.ball_model.extent.x + ball.position.x,
                           ball.position.y, 2. * ball.velocity.x, 0.);
-        } else if ball.position.x > 1.05 {
+        } else if ball.position.x.abs() > 1.05 {
+            if ball.position.x > 0.0 {
+                pong.left_score += 1;
+            } else {
+                pong.right_score += 1;
+            }
+
             ball.position.x = 0.0;
-            pong.left_score += 1;
             ball.velocity.x = (1 - 2 * (timestamp % 2)) as f32;
             ball.velocity.y = (1 - 2 * ((timestamp/7) % 2)) as f32;
             play_audio(&pong.bloop);
-            unsafe { setScore(0, pong.left_score) };
-        } else if ball.position.x < -1.05 {
-            ball.position.x = 0.0;
-            pong.right_score += 1;
-            ball.velocity.x = (1 - 2 * (timestamp % 2)) as f32;
-            ball.velocity.y = (1 - 2 * ((timestamp/7) % 2)) as f32;
-            play_audio(&pong.bloop);
-            unsafe { setScore(1, pong.right_score) };
+            set_score(pong.left_score, pong.right_score);
         }
 
     ball.position.y += ball.velocity.y * delta as f32 * BALL_SPEED;
@@ -209,10 +279,10 @@ pub fn onAnimationFrame(timestamp: i32) {
     pong.ball_tail.update(delta);
     pong.sparks.update(delta);
 
-    clear(COLOR_BUFFER | DEPTH_BUFFER);
-    pong.ctx.shader_program.enable();
-    pong.ctx.position.enable();
-    pong.ctx.texcoord.enable();
+    pong.ctx.gl.clear(GL::COLOR_BUFFER_BIT | GL::DEPTH_BUFFER_BIT);
+    pong.ctx.gl.use_program(Some(&pong.ctx.program));
+    pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.position as u32);
+    pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.texcoord as u32);
 
     pong.field_model.pre_render(&pong.ctx);
     pong.field_model.render(&Vec2 {x: 0.0, y: 0.0}, &pong.ctx);
@@ -228,9 +298,7 @@ pub fn onAnimationFrame(timestamp: i32) {
     pong.sparks.render(&pong.spark_model, &pong.ctx);
 }
 
-#[no_mangle]
-#[allow(non_snake_case)]
-pub fn onKey(key: u32, state: bool) {
+pub fn on_key(key: u32, state: bool) {
     const KEY_UP: u32 = 38;
     const KEY_DOWN: u32 = 40;
     const KEY_A: u32 = 65;
@@ -247,12 +315,6 @@ pub fn onKey(key: u32, state: bool) {
     };
 }
 
-#[derive(Clone)]
-struct Vec2 {
-    x: f32,
-    y: f32
-}
-
 impl Vec2 {
     fn zero() -> Vec2 {
         Vec2 { x: 0.0, y: 0.0 }
@@ -262,17 +324,50 @@ impl Vec2 {
     }
 }
 
-struct Model {
-    vertex_buffer: Buffer,
-    num_vertices: u32,
-    texture: Texture,
-    extent: Vec2
+impl RenderContext {
+    fn new(gl: WebGlRenderingContext, program: WebGlProgram) -> RenderContext {
+        let position = gl.get_attrib_location(&program, "a_position");
+        let texcoord = gl.get_attrib_location(&program, "a_texcoord");
+        let offset = gl.get_uniform_location(&program, "u_offset").unwrap();
+        let sampler = gl.get_uniform_location(&program, "u_sampler").unwrap();
+        let opacity = gl.get_uniform_location(&program, "u_opacity").unwrap();
+        RenderContext {
+            gl, program, position, texcoord,
+            offset, sampler, opacity
+        }
+    }
+    fn load_texture(&self, data: &[u8], width: i32, height: i32) -> WebGlTexture {
+        let texture = self.gl.create_texture().unwrap();
+        self.gl.active_texture(GL::TEXTURE0);
+        self.gl.bind_texture(GL::TEXTURE_2D, Some(&texture));
+        self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            GL::TEXTURE_2D, 0, GL::RGBA as i32,
+            width, height, 0, GL::RGBA, 
+            GL::UNSIGNED_BYTE,
+            Some(data)).unwrap();
+        self.gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MAG_FILTER, GL::NEAREST as i32);
+        self.gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MIN_FILTER, GL::NEAREST as i32);
+        texture
+    }
 }
 
 impl Model {
-    fn new(vertices: &[f32], texture: Texture) -> Model {
-        let vertex_buffer = Buffer::new(BufferType::Array);
-        vertex_buffer.bind().data(vertices, DrawType::Static);
+    fn new(ctx: &RenderContext, vertices: &[f32], texture: WebGlTexture) -> Model {
+        let vertex_buffer = ctx.gl.create_buffer().unwrap();
+        ctx.gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&vertex_buffer));
+
+        // FIXME: Hack to fill a vertex buffer
+        let memory_buffer = wasm_bindgen::memory()
+            .dyn_into::<WebAssembly::Memory>().unwrap()
+            .buffer();
+        let vertices_location = vertices.as_ptr() as u32 / 4;
+        let vertex_array = js_sys::Float32Array::new(&memory_buffer)
+            .subarray(vertices_location, vertices_location + vertices.len() as u32);
+
+        ctx.gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&vertex_buffer));
+        ctx.gl.buffer_data_with_array_buffer_view(WebGlRenderingContext::ARRAY_BUFFER,
+                                                  &vertex_array,
+                                                  WebGlRenderingContext::STATIC_DRAW);
 
         let mut x: f32 = 0.0;
         let mut y: f32 = 0.0;
@@ -290,47 +385,26 @@ impl Model {
         }
     }
     fn pre_render(&self, ctx: &RenderContext) {
-        self.vertex_buffer.bind();
-        self.texture.bind(TextureUnit::Texture0);
-        ctx.position.pointer(2, DataType::Float, Bool::False, 16, 0);
-        ctx.texcoord.pointer(2, DataType::Float, Bool::False, 16, 8);
-        ctx.sampler.int_1(0);
-        ctx.opacity.float_1(1.0);
+        ctx.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.vertex_buffer));
+        ctx.gl.active_texture(GL::TEXTURE0);
+        ctx.gl.bind_texture(GL::TEXTURE_2D, Some(&self.texture));
+        ctx.gl.vertex_attrib_pointer_with_i32(ctx.position as u32, 2, GL::FLOAT, false, 16, 0);
+        ctx.gl.vertex_attrib_pointer_with_i32(ctx.texcoord as u32, 2, GL::FLOAT, false, 16, 8);
+        ctx.gl.uniform1i(Some(&ctx.sampler), 0);
+        ctx.gl.uniform1f(Some(&ctx.opacity), 1.0);
     }
     fn render(&self, pos: &Vec2, ctx: &RenderContext) {
-        ctx.offset.float_4(pos.x, pos.y, 0.0, 0.0);
-        draw_arrays(ArrayType::Triangles, 0, self.num_vertices / 4);
+        ctx.gl.uniform4f(Some(&ctx.offset), pos.x, pos.y, 0.0, 0.0);
+        ctx.gl.draw_arrays(GL::TRIANGLES, 0, self.num_vertices as i32 / 4);
     }
     fn render_particle(&self, pos: &Vec2, opacity: f32, ctx: &RenderContext) {
-        ctx.offset.float_4(pos.x, pos.y, 0.0, 0.0);
-        ctx.opacity.float_1(opacity);
-        draw_arrays(ArrayType::Triangles, 0, self.num_vertices / 4);
+        ctx.gl.uniform4f(Some(&ctx.offset), pos.x, pos.y, 0.0, 0.0);
+        ctx.gl.uniform1f(Some(&ctx.opacity), opacity);
+        ctx.gl.draw_arrays(GL::TRIANGLES, 0, self.num_vertices as i32 / 4);
     }
 }
 
-struct Paddle {
-    position: Vec2,
-    up: bool,
-    down: bool,
-}
 
-struct Ball {
-    position: Vec2,
-    velocity: Vec2
-}
-
-struct Particle {
-    position: Vec2,
-    velocity: Vec2,
-    acceleration: Vec2,
-    life: i32,
-    total_life: i32
-}
-
-struct ParticleSystem {
-    max_particles: usize,
-    particles: Vec<Particle>,   
-}
 
 impl ParticleSystem {
     fn new(max_particles: usize) -> ParticleSystem {
@@ -363,6 +437,41 @@ impl ParticleSystem {
         self.particles.retain(|p| p.life > 0);
     }
 }
+
+fn compile_shader(ctx: &WebGlRenderingContext, shader_type: u32, source: &str) -> Result<WebGlShader, String> {
+    let shader = ctx.create_shader(shader_type)
+        .ok_or_else(|| String::from("Unable to create shader object"))?;
+    ctx.shader_source(&shader, source);
+    ctx.compile_shader(&shader);
+
+    let ok = ctx.get_shader_parameter(&shader, GL::COMPILE_STATUS)
+            .as_bool()
+            .unwrap_or(false);
+    if ok {
+        Ok(shader)
+    } else {
+        Err(ctx.get_shader_info_log(&shader)
+            .unwrap_or_else(|| String::from("Unknown error creating shader")))
+    }
+}
+
+fn link_program(ctx: &WebGlRenderingContext, vert_shader: &WebGlShader, frag_shader: &WebGlShader) -> Result<WebGlProgram, String> {
+    let program = ctx.create_program().ok_or_else(|| String::from("Unable to create shader object"))?;
+
+    ctx.attach_shader(&program, vert_shader);
+    ctx.attach_shader(&program, frag_shader);
+    ctx.link_program(&program);
+
+    let ok = ctx.get_program_parameter(&program, GL::LINK_STATUS)
+        .as_bool()
+        .unwrap_or(false);
+    if ok {
+        Ok(program)
+    } else {
+        Err(ctx.get_program_info_log(&program)
+            .unwrap_or_else(|| String::from("Unknown error creating program object")))
+    }
+}
 fn collide(p1: &Vec2, e1: &Vec2, p2: &Vec2, e2: &Vec2) -> bool {
     (if p1.x < p2.x { p2.x - p1.x } else { p1.x - p2.x }) < e1.x + e2.x &&
         (if p1.y < p2.y { p2.y - p1.y } else { p1.y - p2.y }) < e1.y + e2.y
@@ -373,9 +482,28 @@ fn clamp(x: f32, min: f32, max: f32) -> f32 {
 }
 
 fn play_audio(sample: &[f32]) {
-    unsafe {
-        playAudio(sample.as_ptr(), sample.len() as u32);
-    }
+    let pong = unsafe { PONG.as_mut().unwrap() };
+    let ctx = &pong.audio_ctx;
+    let buffer = &pong.audio_buffer;
+
+    let source = ctx.create_buffer_source().unwrap();
+
+    // FIXME: copy_to_channel requires a mutable reference for some reason
+    let mut_sample = unsafe {(sample as *const [f32] as *mut [f32]).as_mut().unwrap()};
+
+    buffer.copy_to_channel(mut_sample, 0).unwrap();
+    source.set_buffer(Some(&buffer));
+    source.connect_with_audio_node(&ctx.destination()).unwrap();
+    ctx.resume().unwrap();
+    source.start().unwrap();
+}
+
+fn set_score(left: u32, right: u32) {
+    let document = web_sys::window().unwrap().document().unwrap();
+    document.get_element_by_id("score_left").unwrap()
+        .set_text_content(Some(&left.to_string()));
+    document.get_element_by_id("score_right").unwrap()
+        .set_text_content(Some(&right.to_string()));
 }
 
 fn create_sparks(ps: &mut ParticleSystem, x: f32, y: f32, dx: f32, dy: f32) {
@@ -387,3 +515,5 @@ fn create_sparks(ps: &mut ParticleSystem, x: f32, y: f32, dx: f32, dy: f32) {
         ps.add(Vec2::new(x, y), Vec2::new(-dy + ddx, dx + ddy), Vec2::zero(), 100);
     }
 }
+
+
