@@ -14,8 +14,9 @@ varying mediump vec2 v_texcoord;
 uniform sampler2D u_sampler;
 uniform float u_opacity;
 void main() {
- gl_FragColor = texture2D(u_sampler, v_texcoord);
- gl_FragColor.a *= u_opacity;
+ vec4 color = texture2D(u_sampler, v_texcoord);
+ color.a *= u_opacity;
+ gl_FragColor = color;
 }";
 
 pub const BALL_VERTICES: [f32; 2*3*4] = [
