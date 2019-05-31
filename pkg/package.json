@@ -1,0 +1,15 @@
+{
+  "name": "wasm-pong",
+  "collaborators": [
+    "Teemu Erkkola <teemu.erkkola@iki.fi>"
+  ],
+  "version": "0.2.0",
+  "files": [
+    "wasm_pong_bg.wasm",
+    "wasm_pong.js",
+    "wasm_pong.d.ts"
+  ],
+  "module": "wasm_pong.js",
+  "types": "wasm_pong.d.ts",
+  "sideEffects": "false"
+}
