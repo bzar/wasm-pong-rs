@@ -3,32 +3,28 @@ mod data;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use js_sys::WebAssembly;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
-    WebGlProgram, WebGlUniformLocation, WebGlRenderingContext, WebGlShader,
-    WebGlTexture, WebGlBuffer, AudioContext, AudioBuffer, HtmlCanvasElement,
-    KeyboardEvent
+    WebGl2RenderingContext, AudioContext, AudioBuffer, HtmlCanvasElement, KeyboardEvent
 };
+use byte_slice_cast::{ToByteSlice};
 
-// Convenience alias for referring to OpenGL constants
-type GL = WebGlRenderingContext;
+use glow::Context;
 
 const PADDLE_SPEED: f32 = 0.001;
 const BALL_SPEED: f32 = 0.0012;
 
 const AUDIO_BUFFER_SIZE: usize = 8192;
-type WebGlVertexArray = i32;
 
-struct RenderContext {
-    gl: WebGlRenderingContext,
-    program: WebGlProgram,
-    position: WebGlVertexArray,
-    texcoord: WebGlVertexArray,
-    offset: WebGlUniformLocation,
-    sampler: WebGlUniformLocation,
-    opacity: WebGlUniformLocation,
+struct RenderContext<C: glow::Context> {
+    gl: C,
+    program: C::Program,
+    position: u32,
+    texcoord: u32,
+    offset: C::UniformLocation,
+    sampler: C::UniformLocation,
+    opacity: C::UniformLocation,
 }
 
 #[derive(Clone)]
@@ -37,10 +33,10 @@ struct Vec2 {
     y: f32
 }
 
-struct Model {
-    vertex_buffer: WebGlBuffer,
+struct Model<C: glow::Context> {
+    vertex_buffer: C::Buffer,
     num_vertices: u32,
-    texture: WebGlTexture,
+    texture: C::Texture,
     extent: Vec2
 }
 
@@ -68,18 +64,18 @@ struct ParticleSystem {
     particles: Vec<Particle>,   
 }
 
-struct Pong {
-    ctx: RenderContext,
+struct Pong<C: glow::Context> {
+    ctx: RenderContext<C>,
     audio_ctx: AudioContext,
     audio_buffer: AudioBuffer,
 
     timestamp: i32,
 
-    ball_model: Model,
-    ball_tail_model: Model,
-    paddle_model: Model,
-    spark_model: Model,
-    field_model: Model,
+    ball_model: Model<C>,
+    ball_tail_model: Model<C>,
+    paddle_model: Model<C>,
+    spark_model: Model<C>,
+    field_model: Model<C>,
 
     beep: Vec<f32>,
     boop: Vec<f32>,
@@ -96,7 +92,7 @@ struct Pong {
     right_score: u32
 }
 
-static mut PONG: Option<Pong> = None;
+static mut PONG: Option<Pong<glow::web::Context>> = None;
 
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
@@ -105,20 +101,25 @@ pub fn start() -> Result<(), JsValue> {
     let canvas: HtmlCanvasElement = document.get_element_by_id("canvas").unwrap().dyn_into()?;
     let ctx_options = js_sys::Object::new();
     js_sys::Reflect::set(&ctx_options, &"alpha".into(), &false.into()).unwrap();
-    let gl: WebGlRenderingContext = canvas
-        .get_context_with_context_options("webgl", &ctx_options)?.unwrap().dyn_into()?;
+    let gl_ctx: WebGl2RenderingContext = canvas
+        .get_context_with_context_options("webgl2", &ctx_options)?.unwrap().dyn_into()?;
 
-    gl.clear_color(0.1, 0.1, 0.1, 1.0);
-    gl.enable(GL::DEPTH_TEST);
-    gl.enable(GL::BLEND);
-    gl.depth_func(GL::LEQUAL);
-    gl.blend_func(GL::SRC_ALPHA, GL::ONE_MINUS_SRC_ALPHA);
-    gl.clear(GL::COLOR_BUFFER_BIT | GL::DEPTH_BUFFER_BIT);
+    let gl = glow::web::Context::from_webgl2_context(gl_ctx);
 
-    let vert_shader = compile_shader(&gl, GL::VERTEX_SHADER, data::VERTEX_SHADER)?;
-    let frag_shader = compile_shader(&gl, GL::FRAGMENT_SHADER, data::FRAGMENT_SHADER)?;
-    let program = link_program(&gl, &vert_shader, &frag_shader)?;
-    gl.use_program(Some(&program));
+    let program = unsafe {
+        gl.clear_color(0.1, 0.1, 0.1, 1.0);
+        gl.enable(glow::DEPTH_TEST);
+        gl.enable(glow::BLEND);
+        gl.depth_func(glow::LEQUAL);
+        gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+        gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+
+        let vert_shader = compile_shader(&gl, glow::VERTEX_SHADER, data::VERTEX_SHADER)?;
+        let frag_shader = compile_shader(&gl, glow::FRAGMENT_SHADER, data::FRAGMENT_SHADER)?;
+        let program = link_program(&gl, vert_shader, frag_shader)?;
+        gl.use_program(Some(program));
+        program
+    };
 
     let ctx = RenderContext::new(gl, program);
 
@@ -282,10 +283,12 @@ pub fn on_animation_frame(timestamp: i32) {
     pong.ball_tail.update(delta);
     pong.sparks.update(delta);
 
-    pong.ctx.gl.clear(GL::COLOR_BUFFER_BIT | GL::DEPTH_BUFFER_BIT);
-    pong.ctx.gl.use_program(Some(&pong.ctx.program));
-    pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.position as u32);
-    pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.texcoord as u32);
+    unsafe {
+        pong.ctx.gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        pong.ctx.gl.use_program(Some(pong.ctx.program));
+        pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.position);
+        pong.ctx.gl.enable_vertex_attrib_array(pong.ctx.texcoord);
+    }
 
     pong.field_model.pre_render(&pong.ctx);
     pong.field_model.render(&Vec2 {x: 0.0, y: 0.0}, &pong.ctx);
@@ -327,50 +330,46 @@ impl Vec2 {
     }
 }
 
-impl RenderContext {
-    fn new(gl: WebGlRenderingContext, program: WebGlProgram) -> RenderContext {
-        let position = gl.get_attrib_location(&program, "a_position");
-        let texcoord = gl.get_attrib_location(&program, "a_texcoord");
-        let offset = gl.get_uniform_location(&program, "u_offset").unwrap();
-        let sampler = gl.get_uniform_location(&program, "u_sampler").unwrap();
-        let opacity = gl.get_uniform_location(&program, "u_opacity").unwrap();
-        RenderContext {
-            gl, program, position, texcoord,
-            offset, sampler, opacity
+impl<C: glow::Context> RenderContext<C> {
+    fn new(gl: C, program: C::Program) -> RenderContext<C> {
+        unsafe {
+            let position = gl.get_attrib_location(program, "a_position") as u32;
+            let texcoord = gl.get_attrib_location(program, "a_texcoord") as u32;
+            let offset = gl.get_uniform_location(program, "u_offset").unwrap();
+            let sampler = gl.get_uniform_location(program, "u_sampler").unwrap();
+            let opacity = gl.get_uniform_location(program, "u_opacity").unwrap();
+            RenderContext {
+                gl, program, position, texcoord,
+                offset, sampler, opacity
+            }
         }
     }
-    fn load_texture(&self, data: &[u8], width: i32, height: i32) -> WebGlTexture {
-        let texture = self.gl.create_texture().unwrap();
-        self.gl.active_texture(GL::TEXTURE0);
-        self.gl.bind_texture(GL::TEXTURE_2D, Some(&texture));
-        self.gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            GL::TEXTURE_2D, 0, GL::RGBA as i32,
-            width, height, 0, GL::RGBA, 
-            GL::UNSIGNED_BYTE,
-            Some(data)).unwrap();
-        self.gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MAG_FILTER, GL::NEAREST as i32);
-        self.gl.tex_parameteri(GL::TEXTURE_2D, GL::TEXTURE_MIN_FILTER, GL::NEAREST as i32);
-        texture
+    fn load_texture(&self, data: &[u8], width: i32, height: i32) -> C::Texture {
+        unsafe {
+            let texture = self.gl.create_texture().unwrap();
+            self.gl.active_texture(glow::TEXTURE0);
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGBA as i32,
+                width, height, 0, glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(data));
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            texture
+        }
     }
 }
 
-impl Model {
-    fn new(ctx: &RenderContext, vertices: &[f32], texture: WebGlTexture) -> Model {
-        let vertex_buffer = ctx.gl.create_buffer().unwrap();
-        ctx.gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&vertex_buffer));
+impl<C: glow::Context> Model<C> {
+    fn new(ctx: &RenderContext<C>, vertices: &[f32], texture: C::Texture) -> Model<C> {
 
-        // FIXME: Hack to fill a vertex buffer
-        let memory_buffer = wasm_bindgen::memory()
-            .dyn_into::<WebAssembly::Memory>().unwrap()
-            .buffer();
-        let vertices_location = vertices.as_ptr() as u32 / 4;
-        let vertex_array = js_sys::Float32Array::new(&memory_buffer)
-            .subarray(vertices_location, vertices_location + vertices.len() as u32);
-
-        ctx.gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&vertex_buffer));
-        ctx.gl.buffer_data_with_array_buffer_view(WebGlRenderingContext::ARRAY_BUFFER,
-                                                  &vertex_array,
-                                                  WebGlRenderingContext::STATIC_DRAW);
+        let vertex_buffer = unsafe {
+            let vertex_buffer = ctx.gl.create_buffer().unwrap();
+            ctx.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
+            ctx.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, ToByteSlice::to_byte_slice(vertices), glow::STATIC_DRAW);
+            vertex_buffer
+        };
 
         let mut x: f32 = 0.0;
         let mut y: f32 = 0.0;
@@ -387,23 +386,29 @@ impl Model {
             extent: Vec2 { x: x * 0.9, y: y * 0.9 }
         }
     }
-    fn pre_render(&self, ctx: &RenderContext) {
-        ctx.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.vertex_buffer));
-        ctx.gl.active_texture(GL::TEXTURE0);
-        ctx.gl.bind_texture(GL::TEXTURE_2D, Some(&self.texture));
-        ctx.gl.vertex_attrib_pointer_with_i32(ctx.position as u32, 2, GL::FLOAT, false, 16, 0);
-        ctx.gl.vertex_attrib_pointer_with_i32(ctx.texcoord as u32, 2, GL::FLOAT, false, 16, 8);
-        ctx.gl.uniform1i(Some(&ctx.sampler), 0);
-        ctx.gl.uniform1f(Some(&ctx.opacity), 1.0);
+    fn pre_render(&self, ctx: &RenderContext<C>) {
+        unsafe {
+            ctx.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vertex_buffer));
+            ctx.gl.active_texture(glow::TEXTURE0);
+            ctx.gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            ctx.gl.vertex_attrib_pointer_f32(ctx.position, 2, glow::FLOAT, false, 16, 0);
+            ctx.gl.vertex_attrib_pointer_f32(ctx.texcoord, 2, glow::FLOAT, false, 16, 8);
+            ctx.gl.uniform_1_i32(Some(ctx.sampler), 0);
+            ctx.gl.uniform_1_f32(Some(ctx.opacity), 1.0);
+        }
     }
-    fn render(&self, pos: &Vec2, ctx: &RenderContext) {
-        ctx.gl.uniform4f(Some(&ctx.offset), pos.x, pos.y, 0.0, 0.0);
-        ctx.gl.draw_arrays(GL::TRIANGLES, 0, self.num_vertices as i32 / 4);
+    fn render(&self, pos: &Vec2, ctx: &RenderContext<C>) {
+        unsafe {
+            ctx.gl.uniform_4_f32(Some(ctx.offset), pos.x, pos.y, 0.0, 0.0);
+            ctx.gl.draw_arrays(glow::TRIANGLES, 0, self.num_vertices as i32 / 4);
+        }
     }
-    fn render_particle(&self, pos: &Vec2, opacity: f32, ctx: &RenderContext) {
-        ctx.gl.uniform4f(Some(&ctx.offset), pos.x, pos.y, 0.0, 0.0);
-        ctx.gl.uniform1f(Some(&ctx.opacity), opacity);
-        ctx.gl.draw_arrays(GL::TRIANGLES, 0, self.num_vertices as i32 / 4);
+    fn render_particle(&self, pos: &Vec2, opacity: f32, ctx: &RenderContext<C>) {
+        unsafe {
+            ctx.gl.uniform_4_f32(Some(ctx.offset), pos.x, pos.y, 0.0, 0.0);
+            ctx.gl.uniform_1_f32(Some(ctx.opacity), opacity);
+            ctx.gl.draw_arrays(glow::TRIANGLES, 0, self.num_vertices as i32 / 4);
+        }
     }
 }
 
@@ -416,7 +421,7 @@ impl ParticleSystem {
             particles: Vec::with_capacity(max_particles)
         }
     }
-    fn render(&self, model: &Model, ctx: &RenderContext) {
+    fn render<C: glow::Context>(&self, model: &Model<C>, ctx: &RenderContext<C>) {
         model.pre_render(ctx);
         for particle in self.particles.iter() {
             model.render_particle(&particle.position, 
@@ -441,38 +446,30 @@ impl ParticleSystem {
     }
 }
 
-fn compile_shader(ctx: &WebGlRenderingContext, shader_type: u32, source: &str) -> Result<WebGlShader, String> {
+unsafe fn compile_shader<C: glow::Context>(ctx: &C, shader_type: u32, source: &str) -> Result<C::Shader, String> {
     let shader = ctx.create_shader(shader_type)
-        .ok_or_else(|| String::from("Unable to create shader object"))?;
-    ctx.shader_source(&shader, source);
-    ctx.compile_shader(&shader);
+        .map_err(|_| String::from("Unable to create shader object"))?;
+    ctx.shader_source(shader, source);
+    ctx.compile_shader(shader);
 
-    let ok = ctx.get_shader_parameter(&shader, GL::COMPILE_STATUS)
-            .as_bool()
-            .unwrap_or(false);
-    if ok {
+    if ctx.get_shader_compile_status(shader) {
         Ok(shader)
     } else {
-        Err(ctx.get_shader_info_log(&shader)
-            .unwrap_or_else(|| String::from("Unknown error creating shader")))
+        Err(ctx.get_shader_info_log(shader))
     }
 }
 
-fn link_program(ctx: &WebGlRenderingContext, vert_shader: &WebGlShader, frag_shader: &WebGlShader) -> Result<WebGlProgram, String> {
-    let program = ctx.create_program().ok_or_else(|| String::from("Unable to create shader object"))?;
+unsafe fn link_program<C: glow::Context>(ctx: &C, vert_shader: C::Shader, frag_shader: C::Shader) -> Result<C::Program, String> {
+    let program = ctx.create_program().map_err(|_| String::from("Unable to create shader object"))?;
 
-    ctx.attach_shader(&program, vert_shader);
-    ctx.attach_shader(&program, frag_shader);
-    ctx.link_program(&program);
+    ctx.attach_shader(program, vert_shader);
+    ctx.attach_shader(program, frag_shader);
+    ctx.link_program(program);
 
-    let ok = ctx.get_program_parameter(&program, GL::LINK_STATUS)
-        .as_bool()
-        .unwrap_or(false);
-    if ok {
+    if ctx.get_program_link_status(program) {
         Ok(program)
     } else {
-        Err(ctx.get_program_info_log(&program)
-            .unwrap_or_else(|| String::from("Unknown error creating program object")))
+        Err(ctx.get_program_info_log(program))
     }
 }
 fn collide(p1: &Vec2, e1: &Vec2, p2: &Vec2, e2: &Vec2) -> bool {
