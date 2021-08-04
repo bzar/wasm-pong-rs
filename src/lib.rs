@@ -1,15 +1,16 @@
 mod data;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use js_sys::WebAssembly;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
     WebGlProgram, WebGlUniformLocation, WebGlRenderingContext, WebGlShader,
     WebGlTexture, WebGlBuffer, AudioContext, AudioBuffer, HtmlCanvasElement,
-    KeyboardEvent
+    KeyboardEvent, Event
+};
+use gloo::{
+    render::{request_animation_frame, AnimationFrame},
+    events::EventListener
 };
 
 // Convenience alias for referring to OpenGL constants
@@ -72,6 +73,10 @@ struct Pong {
     ctx: RenderContext,
     audio_ctx: AudioContext,
     audio_buffer: AudioBuffer,
+
+    request_animation_frame_handle: AnimationFrame,
+    _key_down_event_listener_handle: EventListener,
+    _key_up_event_listener_handle: EventListener,
 
     timestamp: i32,
 
@@ -150,10 +155,27 @@ pub fn start() -> Result<(), JsValue> {
     let audio_buffer = audio_ctx.create_buffer(
         1, (audio_ctx.sample_rate() * 2.0) as u32, audio_ctx.sample_rate()).unwrap();
 
+    let request_animation_frame_handle = request_animation_frame(on_animation_frame);
+
+    let _key_down_event_listener_handle = EventListener::new(&document, "keydown", |e: &Event| {
+        if let Some(e) = e.dyn_ref::<KeyboardEvent>() {
+            on_key(e.key_code(), true);
+        }
+    });
+
+    let _key_up_event_listener_handle = EventListener::new(&document, "keyup", |e: &Event| {
+        if let Some(e) = e.dyn_ref::<KeyboardEvent>() {
+            on_key(e.key_code(), false);
+        }
+    });
+
     unsafe {
         PONG = Some(Pong {
             ctx, audio_ctx, audio_buffer,
             timestamp: 0,
+            request_animation_frame_handle,
+            _key_down_event_listener_handle,
+            _key_up_event_listener_handle,
 
             ball_model, ball_tail_model, paddle_model, spark_model, field_model,
             beep, boop, bloop,
@@ -178,38 +200,11 @@ pub fn start() -> Result<(), JsValue> {
         });
     }
 
-    // FIXME: Hack for requestAnimationFrame loop
-    let f = Rc::new(RefCell::new(None));
-    let g = f.clone();
-    *g.borrow_mut() = Some(Closure::wrap(Box::new(move |i| {
-        on_animation_frame(i);
-        request_animation_frame(f.borrow().as_ref().unwrap());
-    }) as Box<FnMut(i32)>));
-    request_animation_frame(g.borrow().as_ref().unwrap());
-
-    // FIXME: Hacky key event handler binding
-    let onkeydown_handler = Closure::wrap(Box::new(|e: KeyboardEvent| {
-        on_key(e.key_code(), true);
-    }) as Box<FnMut(KeyboardEvent)>);
-    window.set_onkeydown(Some(onkeydown_handler.as_ref().unchecked_ref()));
-    onkeydown_handler.forget();
-
-    let onkeyup_handler = Closure::wrap(Box::new(|e: KeyboardEvent| {
-        on_key(e.key_code(), false);
-    }) as Box<FnMut(KeyboardEvent)>);
-    window.set_onkeyup(Some(onkeyup_handler.as_ref().unchecked_ref()));
-    onkeyup_handler.forget();
-
     Ok(())
 }
 
-fn request_animation_frame(f: &Closure<FnMut(i32)>) {
-    web_sys::window().unwrap()
-        .request_animation_frame(f.as_ref().unchecked_ref())
-        .expect("should register `requestAnimationFrame` OK");
-}
-
-pub fn on_animation_frame(timestamp: i32) {
+pub fn on_animation_frame(timestamp: f64) {
+    let timestamp = timestamp as i32;
     let pong = unsafe { PONG.as_mut().unwrap() };
     let delta = match pong.timestamp {
         0 => 1,
@@ -299,6 +294,8 @@ pub fn on_animation_frame(timestamp: i32) {
     pong.paddle_model.render(&right.position, &pong.ctx);
 
     pong.sparks.render(&pong.spark_model, &pong.ctx);
+
+    pong.request_animation_frame_handle = request_animation_frame(on_animation_frame);
 }
 
 pub fn on_key(key: u32, state: bool) {
